@@ -439,6 +439,13 @@ class ShowcaseController {
   FloatingActionWidget? get _getFloatingActionWidget =>
       config.floatingActionWidget ?? globalFloatingActionWidget;
 
+  /// Returns the current step index (0-based) if showcase is running.
+  ///
+  /// Returns null if showcase is not running or completed.
+  /// This provides access to the current step index from within a
+  /// ShowcaseController instance.
+  int? get currentStepIndex => showcaseView.currentStepIndex;
+
   @override
   int get hashCode => Object.hash(id, key);
 

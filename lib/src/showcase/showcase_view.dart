@@ -193,6 +193,18 @@ class ShowcaseView {
   /// Returns whether showcase is currently running or not.
   bool get isShowcaseRunning => getActiveShowcaseKey != null;
 
+  /// Returns the current step index (0-based) if showcase is running.
+  ///
+  /// Returns null if showcase is not running or completed.
+  int? get currentStepIndex {
+    if (_ids == null || _activeWidgetId == null) return null;
+    if (_activeWidgetId! < 0 || _activeWidgetId! >= _ids!.length) return null;
+    return _activeWidgetId;
+  }
+
+  /// Returns the total number of steps in the showcase.
+  int get totalSteps => _ids?.length ?? 0;
+
   /// Returns list of showcase controllers for current active showcase.
   List<ShowcaseController> get _getCurrentActiveControllers {
     return ShowcaseService.instance
