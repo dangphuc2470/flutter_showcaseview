@@ -79,11 +79,16 @@ class ShowcaseView {
     this.globalTooltipActions,
     this.globalFloatingActionWidget,
     this.hideFloatingActionWidgetForShowcase = const [],
+    Map<GlobalKey, bool>? skippableKeys,
   }) {
     ShowcaseService.instance.register(this, scope: scope);
     _hideFloatingWidgetKeys = {
       for (final item in hideFloatingActionWidgetForShowcase) item: true,
     };
+    // Register skippable status for keys provided at registration
+    if (skippableKeys != null) {
+      _skippableKeys.addAll(skippableKeys);
+    }
   }
 
   /// Retrieves last registered [ShowcaseView].
@@ -171,6 +176,9 @@ class ShowcaseView {
 
   /// Map to store keys for which floating action widget should be hidden.
   late final Map<GlobalKey, bool> _hideFloatingWidgetKeys;
+
+  /// Map to store skippable status for each showcase key.
+  final Map<GlobalKey, bool> _skippableKeys = {};
 
   /// Returns whether showcase is completed or not.
   bool get isShowCaseCompleted => _ids == null && _activeWidgetId == null;
@@ -316,6 +324,23 @@ class ShowcaseView {
         : globalFloatingActionWidget;
   }
 
+  /// Registers the skippable status for a showcase key.
+  ///
+  /// * [showcaseKey] - The key of the showcase
+  /// * [skippable] - Whether this showcase should be skipped if not found
+  void registerSkippable(GlobalKey showcaseKey, bool skippable) {
+    _skippableKeys[showcaseKey] = skippable;
+  }
+
+  /// Checks if a showcase key is skippable.
+  ///
+  /// * [showcaseKey] - The key of the showcase to check
+  /// Returns true if the showcase should be skipped when not found, false otherwise.
+  bool isSkippable(GlobalKey showcaseKey) {
+    // Check the stored map for skippable status
+    return _skippableKeys[showcaseKey] ?? false;
+  }
+
   void _startShowcase(
     Duration delay,
     List<GlobalKey<State<StatefulWidget>>> widgetIds,
@@ -348,6 +373,8 @@ class ShowcaseView {
   /// - Starts the current showcase
   /// - Checks if we've reached the end of showcases
   /// - Updates the overlay to reflect current state
+  /// - Skips showcases that don't have their key in the widget tree
+  ///   (if per-key skippable is enabled)
   void _changeSequence(ShowcaseProgressType type) {
     assert(_activeWidgetId != null, 'Please ensure to call startShowcase.');
     final id = switch (type) {
@@ -355,17 +382,74 @@ class ShowcaseView {
       ShowcaseProgressType.backward => _activeWidgetId! - 1,
     };
     _onComplete().then(
-      (_) {
+          (_) async {
         if (!_mounted) return;
         _activeWidgetId = id;
-        _onStart();
-        if (_activeWidgetId! >= _ids!.length) {
-          _cleanupAfterSteps();
-          onFinish?.call();
+        // Skip showcases that don't have their key in the widget tree
+        // Check per-key skippable status
+        _skipInvalidShowcases(type);
+        await _onStart();
+        // Check if showcase was finished in _onStart() or if we've reached the end
+        if (!_mounted || _activeWidgetId == null || _activeWidgetId! >= _ids!.length || _activeWidgetId! < 0) {
+          // Showcase finished in _onStart() or reached the end
+          return;
         }
         OverlayManager.instance.update(show: isShowcaseRunning, scope: scope);
       },
     );
+  }
+
+  /// Skips showcases that don't have their key in the widget tree.
+  ///
+  /// This method recursively checks if the current showcase has controllers
+  /// (meaning its key exists in the widget tree). If not, it checks the skippable
+  /// status for that key. If skippable is true, it automatically moves to the
+  /// next/previous showcase until it finds one that exists or reaches the end
+  /// of the showcase list. If skippable is false, it stops (pauses).
+  ///
+  /// * [type] - Direction to skip (forward or backward)
+  /// * [maxIterations] - Maximum number of iterations to prevent infinite loops
+  void _skipInvalidShowcases(ShowcaseProgressType type, {int maxIterations = 100}) {
+    if (_ids == null || _activeWidgetId == null) return;
+    
+    int iterations = 0;
+    while (iterations < maxIterations) {
+      // Check if we've reached the end
+      if (_activeWidgetId! >= _ids!.length || _activeWidgetId! < 0) {
+        break;
+      }
+
+      final currentKey = _ids![_activeWidgetId!];
+      
+      // Check if current showcase has controllers (key exists in widget tree)
+      final controllers = _getCurrentActiveControllers;
+      if (controllers.isNotEmpty) {
+        // Found a valid showcase, stop skipping
+        break;
+      }
+
+      // Current showcase doesn't exist, check if it's skippable
+      final shouldSkip = isSkippable(currentKey);
+      
+      if (!shouldSkip) {
+        // Not skippable, stop here (will pause)
+        break;
+      }
+
+      // Current showcase is skippable, skip to next/previous
+      final nextId = switch (type) {
+        ShowcaseProgressType.forward => _activeWidgetId! + 1,
+        ShowcaseProgressType.backward => _activeWidgetId! - 1,
+      };
+
+      // Check bounds
+      if (nextId >= _ids!.length || nextId < 0) {
+        break;
+      }
+
+      _activeWidgetId = nextId;
+      iterations++;
+    }
   }
 
   /// Finds the appropriate ShowcaseView that can handle all the specified
@@ -382,10 +466,10 @@ class ShowcaseView {
   /// another scope's ShowcaseView that contains the keys not found in the
   /// current scope.
   ShowcaseView _findEnclosingShowcaseView(
-    List<GlobalKey<State<StatefulWidget>>> widgetIds,
-  ) {
+      List<GlobalKey<State<StatefulWidget>>> widgetIds,
+      ) {
     final currentScopeControllers =
-        ShowcaseService.instance.getControllers(scope: scope);
+    ShowcaseService.instance.getControllers(scope: scope);
     final keysNotInCurrentScope = {
       for (final key in widgetIds)
         if (!currentScopeControllers.containsKey(key)) key: true,
@@ -416,21 +500,56 @@ class ShowcaseView {
   /// Internal method to handle showcase start.
   ///
   /// Initializes controllers and sets up auto-play timer if enabled.
+  /// Skips showcases that don't have their key in the widget tree
+  /// (if per-key skippable is enabled).
   Future<void> _onStart() async {
     _activeWidgetId ??= 0;
-    if (_activeWidgetId! < _ids!.length) {
-      onStart?.call(_activeWidgetId, _ids![_activeWidgetId!]);
-      final controllers = _getCurrentActiveControllers;
-      final controllerLength = controllers.length;
-      for (var i = 0; i < controllerLength; i++) {
-        final controller = controllers[i];
-        final isAutoScroll =
-            controller.config.enableAutoScroll ?? enableAutoScroll;
-        if (controllerLength == 1 && isAutoScroll) {
-          await controller.scrollIntoView();
-        } else {
-          controller.startShowcase();
-        }
+    
+    // Skip showcases that don't have their key in the widget tree
+    // Check per-key skippable status
+    _skipInvalidShowcases(ShowcaseProgressType.forward);
+    
+    // Check if we've reached the end after skipping
+    if (_activeWidgetId! >= _ids!.length || _activeWidgetId! < 0) {
+      _cleanupAfterSteps();
+      OverlayManager.instance.update(show: false, scope: scope);
+      onFinish?.call();
+      return;
+    }
+    
+    final controllers = _getCurrentActiveControllers;
+    
+    // If no controllers found, check if we should pause or skip
+    if (controllers.isEmpty) {
+      final currentKey = _ids![_activeWidgetId!];
+      final shouldSkip = isSkippable(currentKey);
+      
+      if (!shouldSkip) {
+        // Not skippable, pause (keep showcase active but don't show anything)
+        // The showcase will continue when the widget appears and recalculateRootWidgetSize
+        // is called, which will trigger updateControllerData and overlay update
+        OverlayManager.instance.update(show: false, scope: scope);
+        return;
+      }
+      // If skippable, _skipInvalidShowcases should have already handled it
+      // But if we're here, it means we couldn't skip further, so finish
+      _cleanupAfterSteps();
+      OverlayManager.instance.update(show: false, scope: scope);
+      onFinish?.call();
+      return;
+    }
+    
+    // Widget exists, start the showcase
+    onStart?.call(_activeWidgetId, _ids![_activeWidgetId!]);
+    final controllerLength = controllers.length;
+    for (var i = 0; i < controllerLength; i++) {
+      final controller = controllers[i];
+      final isAutoScroll =
+          controller.config.enableAutoScroll ?? enableAutoScroll;
+      if (controllerLength == 1 && isAutoScroll) {
+        await controller.scrollIntoView();
+      } else {
+        controller.startShowcase();
       }
     }
 
@@ -440,7 +559,7 @@ class ShowcaseView {
       final config = _getCurrentActiveControllers.firstOrNull?.config;
       _timer = Timer(
         config?.autoPlayDelay ?? autoPlayDelay,
-        () => next(force: true),
+            () => next(force: true),
       );
     }
   }
@@ -455,7 +574,7 @@ class ShowcaseView {
     await Future.wait([
       for (var i = 0; i < controllerLength; i++)
         if (!(currentControllers[i].config.disableScaleAnimation ??
-                disableScaleAnimation) &&
+            disableScaleAnimation) &&
             currentControllers[i].reverseAnimationCallback != null)
           currentControllers[i].reverseAnimationCallback!.call(),
     ]);

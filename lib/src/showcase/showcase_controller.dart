@@ -222,12 +222,24 @@ class ShowcaseController {
       if (!showcaseView.enableShowcase) return;
 
       updateControllerData();
-      if (!showcaseView.isShowcaseRunning) return;
-
-      OverlayManager.instance.update(
-        show: showcaseView.isShowcaseRunning,
-        scope: showcaseView.scope,
-      );
+      
+      // Check if showcase is waiting for this widget to appear
+      if (showcaseView.isShowcaseRunning && 
+          showcaseView.getActiveShowcaseKey == key) {
+        // Widget just appeared, ensure overlay is shown
+        OverlayManager.instance.update(
+          show: true,
+          scope: showcaseView.scope,
+        );
+      } else if (!showcaseView.isShowcaseRunning) {
+        return;
+      } else {
+        // Showcase is running but not for this key
+        OverlayManager.instance.update(
+          show: showcaseView.isShowcaseRunning,
+          scope: showcaseView.scope,
+        );
+      }
     });
   }
 
@@ -266,6 +278,13 @@ class ShowcaseController {
       rectBound: rect,
       screenSize: size,
     );
+    
+    // If showcase is running and this is the active key, trigger start
+    // This handles the case where a widget appears after showcase started
+    if (showcaseView.isShowcaseRunning && 
+        showcaseView.getActiveShowcaseKey == key) {
+      startShowcase();
+    }
   }
 
   /// Initializes the root widget size and render object.
@@ -371,8 +390,8 @@ class ShowcaseController {
     if (config.disposeOnTap ?? false) {
       showcaseView.dismiss();
       assert(
-        config.onTargetClick != null,
-        'onTargetClick callback should be provided when disposeOnTap is true',
+      config.onTargetClick != null,
+      'onTargetClick callback should be provided when disposeOnTap is true',
       );
       config.onTargetClick?.call();
     } else {
