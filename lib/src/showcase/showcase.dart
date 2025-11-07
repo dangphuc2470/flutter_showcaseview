@@ -530,7 +530,7 @@ class Showcase extends StatefulWidget {
 }
 
 class _ShowcaseState extends State<Showcase> {
-  ShowcaseController get _controller => ShowcaseService.instance.getController(
+  ShowcaseController? get _controller => ShowcaseService.instance.getController(
         key: widget.showcaseKey,
         id: _uniqueId,
         scope: _showCaseWidgetManager.name,
@@ -573,7 +573,7 @@ class _ShowcaseState extends State<Showcase> {
     // This is to support hot reload
     _updateControllerValues();
 
-    _controller.recalculateRootWidgetSize(context);
+    _controller?.recalculateRootWidgetSize(context);
     return widget.child;
   }
 
@@ -592,12 +592,15 @@ class _ShowcaseState extends State<Showcase> {
     _showCaseWidgetManager = ShowcaseService.instance.getScope(
       scope: _showCaseWidgetManager.name,
     );
-    ShowcaseService.instance.addController(
-      controller: _controller
-        ..showcaseView = _showCaseWidgetManager.showcaseView,
-      key: widget.showcaseKey,
-      id: _uniqueId,
-      scope: _showCaseWidgetManager.name,
-    );
+    final controller = _controller;
+    if (controller != null) {
+      ShowcaseService.instance.addController(
+        controller: controller
+          ..showcaseView = _showCaseWidgetManager.showcaseView,
+        key: widget.showcaseKey,
+        id: _uniqueId,
+        scope: _showCaseWidgetManager.name,
+      );
+    }
   }
 }
