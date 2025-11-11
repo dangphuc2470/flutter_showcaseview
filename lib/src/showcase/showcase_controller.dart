@@ -147,6 +147,7 @@ class ShowcaseController {
       screenSize: size,
       renderBox: _context.findRenderObject() as RenderBox?,
       padding: config.targetPadding,
+      offset: config.offset ?? Offset.zero,
     );
   }
 
@@ -261,6 +262,7 @@ class ShowcaseController {
       screenSize: size,
       renderBox: renderBox,
       padding: config.targetPadding,
+      offset: config.offset ?? Offset.zero,
     );
 
     position = newPosition;

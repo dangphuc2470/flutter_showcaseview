@@ -271,9 +271,10 @@ class _ToolTipWidgetState extends State<ToolTipWidget>
         gapBetweenContentAndAction:
             widget.tooltipActionConfig.gapBetweenContentAndAction,
         screenEdgePadding: widget.toolTipMargin,
-        showcaseOffset: widget.showcaseController.rootRenderObject
+        showcaseOffset: (widget.showcaseController.rootRenderObject
                 ?.localToGlobal(Offset.zero) ??
-            Offset.zero,
+            Offset.zero) +
+            (widget.showcaseController.config.offset ?? Offset.zero),
         targetTooltipGap: widget.targetTooltipGap,
         children: [
           _TooltipLayoutId(

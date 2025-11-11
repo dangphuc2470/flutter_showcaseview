@@ -113,6 +113,7 @@ class Showcase extends StatefulWidget {
     this.enableAutoScroll,
     this.floatingActionWidget,
     this.targetTooltipGap = 10,
+    this.offset = Offset.zero,
   })  : height = null,
         width = null,
         container = null,
@@ -204,6 +205,7 @@ class Showcase extends StatefulWidget {
     this.toolTipMargin = 14,
     this.targetTooltipGap = 10,
     this.showArrow = true,
+    this.offset = Offset.zero,
   })  : onToolTipClick = null,
         scaleAnimationDuration = const Duration(milliseconds: 300),
         scaleAnimationCurve = Curves.decelerate,
@@ -524,6 +526,15 @@ class Showcase extends StatefulWidget {
   ///
   /// Defaults to 10.
   final double targetTooltipGap;
+
+  /// Optional offset to adjust the position of the showcase target.
+  ///
+  /// This offset is applied to both the target highlight and tooltip positioning.
+  /// Useful for fine-tuning the showcase position when the automatic positioning
+  /// doesn't match your needs.
+  ///
+  /// Defaults to [Offset.zero].
+  final Offset? offset;
 
   @override
   State<Showcase> createState() => _ShowcaseState();

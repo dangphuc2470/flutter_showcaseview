@@ -42,6 +42,7 @@ class TargetPositionService {
     required this.screenSize,
     this.padding = EdgeInsets.zero,
     this.rootRenderObject,
+    this.offset = Offset.zero,
   }) {
     _getRenderBoxOffset();
   }
@@ -50,6 +51,7 @@ class TargetPositionService {
   final EdgeInsets padding;
   final Size screenSize;
   final RenderObject? rootRenderObject;
+  final Offset offset;
 
   Offset? _boxOffset;
 
@@ -135,11 +137,9 @@ class TargetPositionService {
   /// Gets the top-left corner of the render box in global coordinates.
   Offset topLeft() {
     final box = renderBox;
-    if (box == null) return Offset.zero;
+    if (box == null || _boxOffset == null) return Offset.zero;
 
-    return box.size.topLeft(
-      box.localToGlobal(Offset.zero, ancestor: rootRenderObject),
-    );
+    return box.size.topLeft(_boxOffset!);
   }
 
   /// Gets the center position of the target widget in global coordinates.
@@ -149,13 +149,15 @@ class TargetPositionService {
   ///
   /// This method translates the widget's local coordinates to global screen
   /// coordinates, optionally relative to a specified ancestor widget.
+  /// The offset is applied to adjust the final position.
   void _getRenderBoxOffset() {
     if (renderBox == null) return;
 
-    _boxOffset = renderBox?.localToGlobal(
+    final baseOffset = renderBox?.localToGlobal(
       Offset.zero,
       ancestor: rootRenderObject,
     );
+    _boxOffset = baseOffset != null ? baseOffset + offset : null;
   }
 
   /// Checks if the render box or its offset are null or have invalid

@@ -201,17 +201,60 @@ class ShowcaseView {
   /// Returns whether showcase is currently running or not.
   bool get isShowcaseRunning => getActiveShowcaseKey != null;
 
+  /// Checks if a key is actually skipped (skippable and not found in widget tree).
+  ///
+  /// * [key] - The key to check
+  /// Returns true if the key is skippable and doesn't have controllers.
+  bool _isKeySkipped(GlobalKey key) {
+    if (!isSkippable(key)) return false;
+    final controllers = ShowcaseService.instance
+        .getControllers(scope: scope)[key];
+    return controllers == null || controllers.isEmpty;
+  }
+
   /// Returns the current step index (0-based) if showcase is running.
   ///
   /// Returns null if showcase is not running or completed.
+  /// If skippableKeys are present, returns the index excluding skipped keys.
   int? get currentStepIndex {
     if (_ids == null || _activeWidgetId == null) return null;
     if (_activeWidgetId! < 0 || _activeWidgetId! >= _ids!.length) return null;
+    
+    // If no skippable keys, return the raw index
+    if (_skippableKeys.isEmpty) {
     return _activeWidgetId;
+    }
+    
+    // Count non-skipped keys before the current active widget
+    int displayedIndex = 0;
+    for (int i = 0; i < _activeWidgetId!; i++) {
+      if (!_isKeySkipped(_ids![i])) {
+        displayedIndex++;
+      }
+    }
+    
+    return displayedIndex;
   }
 
   /// Returns the total number of steps in the showcase.
-  int get totalSteps => _ids?.length ?? 0;
+  /// If skippableKeys are present, returns the count excluding skipped keys.
+  int get totalSteps {
+    if (_ids == null) return 0;
+    
+    // If no skippable keys, return the total length
+    if (_skippableKeys.isEmpty) {
+      return _ids!.length;
+    }
+    
+    // Count only non-skipped keys (subtract skipped keys from total)
+    int skippedCount = 0;
+    for (final key in _ids!) {
+      if (_isKeySkipped(key)) {
+        skippedCount++;
+      }
+    }
+    return _ids!.length - skippedCount;
+  }
 
   /// Returns list of showcase controllers for current active showcase.
   List<ShowcaseController> get _getCurrentActiveControllers {
