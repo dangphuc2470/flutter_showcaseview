@@ -165,6 +165,10 @@ class ShowcaseView {
   /// Internal list to store showcase widget keys.
   List<GlobalKey>? _ids;
 
+  /// Internal list to store partition showcase widget keys.
+  /// Each inner list represents a partition of keys.
+  List<List<GlobalKey>>? _partitionKeys;
+
   /// Current active showcase widget index.
   int? _activeWidgetId;
 
@@ -216,13 +220,41 @@ class ShowcaseView {
   ///
   /// Returns null if showcase is not running or completed.
   /// If skippableKeys are present, returns the index excluding skipped keys.
+  /// If partition keys are present, returns the index within the partition list
+  /// that the current key belongs to.
   int? get currentStepIndex {
     if (_ids == null || _activeWidgetId == null) return null;
     if (_activeWidgetId! < 0 || _activeWidgetId! >= _ids!.length) return null;
     
+    final currentKey = _ids![_activeWidgetId!];
+    
+    // If partition keys are present, calculate index within the relevant partition
+    if (_partitionKeys != null) {
+      // Find which partition list the current key belongs to
+      List<GlobalKey>? currentPartition;
+      for (final partition in _partitionKeys!) {
+        if (partition.contains(currentKey)) {
+          currentPartition = partition;
+          break;
+        }
+      }
+      
+      if (currentPartition != null) {
+        // Find index within this partition
+        int displayedIndex = 0;
+        for (int i = 0; i < _activeWidgetId!; i++) {
+          final key = _ids![i];
+          if (currentPartition.contains(key) && !_isKeySkipped(key)) {
+            displayedIndex++;
+          }
+        }
+        return displayedIndex;
+      }
+    }
+    
     // If no skippable keys, return the raw index
     if (_skippableKeys.isEmpty) {
-    return _activeWidgetId;
+      return _activeWidgetId;
     }
     
     // Count non-skipped keys before the current active widget
@@ -238,8 +270,38 @@ class ShowcaseView {
 
   /// Returns the total number of steps in the showcase.
   /// If skippableKeys are present, returns the count excluding skipped keys.
+  /// If partition keys are present and showcase is running, returns the total
+  /// of only the partition list that the current key belongs to.
   int get totalSteps {
     if (_ids == null) return 0;
+    
+    // If partition keys are present and showcase is running, return total of relevant partition
+    if (_partitionKeys != null && _activeWidgetId != null) {
+      final currentKey = _ids![_activeWidgetId!];
+      
+      // Find which partition list the current key belongs to
+      List<GlobalKey>? currentPartition;
+      for (final partition in _partitionKeys!) {
+        if (partition.contains(currentKey)) {
+          currentPartition = partition;
+          break;
+        }
+      }
+      
+      if (currentPartition != null) {
+        // Count only non-skipped keys in this partition
+        if (_skippableKeys.isEmpty) {
+          return currentPartition.length;
+        }
+        int skippedCount = 0;
+        for (final key in currentPartition) {
+          if (_isKeySkipped(key)) {
+            skippedCount++;
+          }
+        }
+        return currentPartition.length - skippedCount;
+      }
+    }
     
     // If no skippable keys, return the total length
     if (_skippableKeys.isEmpty) {
@@ -270,13 +332,51 @@ class ShowcaseView {
   /// Starts showcase with given widget ids after the optional delay.
   ///
   /// * [widgetIds] - List of GlobalKeys for widgets to showcase
+  /// * [partitionKeys] - Optional list of lists, where each inner list represents
+  ///   a partition of showcase widget keys
   /// * [delay] - Optional delay before starting showcase
+  ///
+  /// If [partitionKeys] is provided, it validates that concatenating all lists
+  /// in [partitionKeys] equals [widgetIds]. If not the same, throws an assertion error.
+  /// When partition keys are provided, the total steps and current step index
+  /// are calculated based on which partition list the current key belongs to.
   void startShowCase(
     List<GlobalKey> widgetIds, {
+    List<List<GlobalKey>>? partitionKeys,
     Duration delay = Duration.zero,
   }) {
     assert(_mounted, 'ShowcaseView is no longer mounted');
     if (!_mounted) return;
+    
+    // If partition keys are provided, validate that all partitions concatenated = widgetIds
+    if (partitionKeys != null && partitionKeys.isNotEmpty) {
+      // Flatten all partition lists
+      final combinedKeys = <GlobalKey>[];
+      for (final partition in partitionKeys) {
+        combinedKeys.addAll(partition);
+      }
+      
+      assert(
+        combinedKeys.length == widgetIds.length,
+        'The concatenation of all partitionKeys must equal widgetIds. '
+        'Expected ${widgetIds.length} keys, but got ${combinedKeys.length}',
+      );
+      
+      // Check that the order and content match
+      for (int i = 0; i < widgetIds.length; i++) {
+        assert(
+          combinedKeys[i] == widgetIds[i],
+          'Key mismatch at index $i: expected ${widgetIds[i]}, but got ${combinedKeys[i]}',
+        );
+      }
+      
+      // Store partition keys (deep copy)
+      _partitionKeys = partitionKeys.map((list) => List<GlobalKey>.from(list)).toList();
+    } else {
+      // No partition keys, clear them
+      _partitionKeys = null;
+    }
+    
     _findEnclosingShowcaseView(widgetIds)._startShowcase(delay, widgetIds);
   }
 
@@ -640,6 +740,7 @@ class ShowcaseView {
   /// Cleans up showcase state after completion.
   void _cleanupAfterSteps() {
     _ids = _activeWidgetId = null;
+    _partitionKeys = null;
     _cancelTimer();
   }
 }
