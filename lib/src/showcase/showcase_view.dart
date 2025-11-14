@@ -20,6 +20,7 @@
  * SOFTWARE.
  */
 import 'dart:async';
+import 'dart:developer' as developer;
 
 import 'package:flutter/material.dart';
 
@@ -184,6 +185,114 @@ class ShowcaseView {
   /// Map to store skippable status for each showcase key.
   final Map<GlobalKey, bool> _skippableKeys = {};
 
+  /// Helper method to get formatted timestamp for logging
+  String _getTimestamp() {
+    final now = DateTime.now();
+    return '[${now.hour.toString().padLeft(2, '0')}:'
+        '${now.minute.toString().padLeft(2, '0')}:'
+        '${now.second.toString().padLeft(2, '0')}.'
+        '${now.millisecond.toString().padLeft(3, '0')}]';
+  }
+
+  /// Helper method to convert a map to a readable string for logging
+  String _mapToString(Map<dynamic, dynamic> map, {int indent = 0}) {
+    if (map.isEmpty) return '{}';
+    final indentStr = '  ' * (indent + 1);
+    final buffer = StringBuffer();
+    buffer.writeln('{');
+    map.forEach((key, value) {
+      String valueStr;
+      if (value == null) {
+        valueStr = 'null';
+      } else if (value is Map) {
+        valueStr = '\n${_mapToString(Map<dynamic, dynamic>.from(value), indent: indent + 1)}';
+      } else if (value is List) {
+        if (value.isEmpty) {
+          valueStr = '[]';
+        } else if (value.length <= 3) {
+          valueStr = '[${value.join(", ")}]';
+        } else {
+          // For longer lists, show first few and count
+          valueStr = '[${value.take(3).join(", ")}, ... (${value.length} total)]';
+        }
+      } else {
+        valueStr = value.toString();
+      }
+      buffer.writeln('$indentStr$key: $valueStr');
+    });
+    buffer.write('  ' * indent + '}');
+    return buffer.toString();
+  }
+
+  /// Helper method to get a summary of which keys are found and not found
+  Map<String, dynamic> _getKeyStatusSummary() {
+    if (_ids == null || _ids!.isEmpty) {
+      return {
+        'total_keys': 0,
+        'found_keys': <String>[],
+        'not_found_keys': <String>[],
+        'all_keys': <String>[],
+        'checking_scope': scope,
+        'registered_keys_in_service': <String>[],
+      };
+    }
+
+    final allControllers = ShowcaseService.instance.getControllers(scope: scope);
+    final foundKeys = <String>[];
+    final notFoundKeys = <String>[];
+    final allKeys = <String>[];
+    final registeredKeysInService = <String>[];
+    final keyDiagnostics = <Map<String, dynamic>>[];
+
+    // Get all keys registered in ShowcaseService for this scope
+    for (final registeredKey in allControllers.keys) {
+      registeredKeysInService.add(registeredKey.toString());
+    }
+
+    for (int i = 0; i < _ids!.length; i++) {
+      final key = _ids![i];
+      final keyStr = '[$i] ${key.toString()}';
+      allKeys.add(keyStr);
+      
+      final controllers = allControllers[key];
+      final hasControllers = controllers != null && controllers.isNotEmpty;
+      final hasContext = key.currentContext != null;
+      final isRegisteredInService = allControllers.containsKey(key);
+      
+      final diagnostic = {
+        'index': i,
+        'key': key.toString(),
+        'has_controllers': hasControllers,
+        'controller_count': controllers?.length ?? 0,
+        'has_widget_in_tree': hasContext,
+        'is_registered_in_service': isRegisteredInService,
+        'context_info': hasContext 
+            ? 'Widget is in tree (context exists)'
+            : 'Widget NOT in tree (context is null - may be disposed or not built yet)',
+      };
+      keyDiagnostics.add(diagnostic);
+      
+      if (hasControllers) {
+        foundKeys.add(keyStr);
+      } else {
+        notFoundKeys.add(keyStr);
+      }
+    }
+
+    return {
+      'total_keys': _ids!.length,
+      'found_count': foundKeys.length,
+      'not_found_count': notFoundKeys.length,
+      'found_keys': foundKeys,
+      'not_found_keys': notFoundKeys,
+      'all_keys': allKeys,
+      'checking_scope': scope,
+      'registered_keys_in_service': registeredKeysInService,
+      'registered_keys_count': registeredKeysInService.length,
+      'key_diagnostics': keyDiagnostics,
+    };
+  }
+
   /// Returns whether showcase is completed or not.
   bool get isShowCaseCompleted => _ids == null && _activeWidgetId == null;
 
@@ -223,20 +332,40 @@ class ShowcaseView {
   /// If partition keys are present, returns the index within the partition list
   /// that the current key belongs to.
   int? get currentStepIndex {
-    if (_ids == null || _activeWidgetId == null) return null;
-    if (_activeWidgetId! < 0 || _activeWidgetId! >= _ids!.length) return null;
+    if (_ids == null || _activeWidgetId == null) {
+      developer.log('${_getTimestamp()} 🔍 [SHOWCASE] currentStepIndex - No IDs or activeWidgetId', name: 'ShowcaseView');
+      return null;
+    }
+    if (_activeWidgetId! < 0 || _activeWidgetId! >= _ids!.length) {
+      developer.log(
+        '${_getTimestamp()} 🔍 [SHOWCASE] currentStepIndex - Invalid activeWidgetId\n${_mapToString({
+          'active_index': _activeWidgetId,
+          'total_steps': _ids!.length,
+        })}',
+        name: 'ShowcaseView',
+      );
+      return null;
+    }
     
     final currentKey = _ids![_activeWidgetId!];
     
     // If partition keys are present, calculate index within the relevant partition
     if (_partitionKeys != null) {
       // Find which partition list the current key belongs to
+      // Use identity comparison to ensure we find the exact key reference
       List<GlobalKey>? currentPartition;
-      for (final partition in _partitionKeys!) {
-        if (partition.contains(currentKey)) {
-          currentPartition = partition;
-          break;
+      int partitionIndex = -1;
+      for (int pIdx = 0; pIdx < _partitionKeys!.length; pIdx++) {
+        final partition = _partitionKeys![pIdx];
+        // Check if currentKey is in this partition using identity
+        for (final key in partition) {
+          if (identical(key, currentKey) || key == currentKey) {
+            currentPartition = partition;
+            partitionIndex = pIdx;
+            break;
+          }
         }
+        if (currentPartition != null) break;
       }
       
       if (currentPartition != null) {
@@ -244,16 +373,52 @@ class ShowcaseView {
         int displayedIndex = 0;
         for (int i = 0; i < _activeWidgetId!; i++) {
           final key = _ids![i];
-          if (currentPartition.contains(key) && !_isKeySkipped(key)) {
+          // Check if key is in current partition using identity
+          bool isInPartition = false;
+          for (final partitionKey in currentPartition) {
+            if (identical(key, partitionKey) || key == partitionKey) {
+              isInPartition = true;
+              break;
+            }
+          }
+          if (isInPartition && !_isKeySkipped(key)) {
             displayedIndex++;
           }
         }
+        
+        developer.log(
+          '${_getTimestamp()} 📊 [SHOWCASE] currentStepIndex - Partition mode\n${_mapToString({
+            'active_index': _activeWidgetId,
+            'partition_index': partitionIndex,
+            'partition_size': currentPartition.length,
+            'displayed_index': displayedIndex,
+            'has_skippable': _skippableKeys.isNotEmpty,
+          })}',
+          name: 'ShowcaseView',
+        );
+        
         return displayedIndex;
+      } else {
+        developer.log(
+          '${_getTimestamp()} ⚠️ [SHOWCASE] currentStepIndex - Partition not found for key\n${_mapToString({
+            'active_index': _activeWidgetId,
+            'current_key': currentKey.toString(),
+            'partition_count': _partitionKeys!.length,
+          })}',
+          name: 'ShowcaseView',
+        );
       }
     }
     
     // If no skippable keys, return the raw index
     if (_skippableKeys.isEmpty) {
+      developer.log(
+        '${_getTimestamp()} 📊 [SHOWCASE] currentStepIndex - No partitions, no skippable\n${_mapToString({
+          'active_index': _activeWidgetId,
+          'returned_index': _activeWidgetId,
+        })}',
+        name: 'ShowcaseView',
+      );
       return _activeWidgetId;
     }
     
@@ -265,6 +430,15 @@ class ShowcaseView {
       }
     }
     
+    developer.log(
+      '${_getTimestamp()} 📊 [SHOWCASE] currentStepIndex - With skippable\n${_mapToString({
+        'active_index': _activeWidgetId,
+        'displayed_index': displayedIndex,
+        'skippable_count': _skippableKeys.length,
+      })}',
+      name: 'ShowcaseView',
+    );
+    
     return displayedIndex;
   }
 
@@ -273,38 +447,106 @@ class ShowcaseView {
   /// If partition keys are present and showcase is running, returns the total
   /// of only the partition list that the current key belongs to.
   int get totalSteps {
-    if (_ids == null) return 0;
-    
-    // If partition keys are present and showcase is running, return total of relevant partition
-    if (_partitionKeys != null && _activeWidgetId != null) {
-      final currentKey = _ids![_activeWidgetId!];
-      
-      // Find which partition list the current key belongs to
-      List<GlobalKey>? currentPartition;
-      for (final partition in _partitionKeys!) {
-        if (partition.contains(currentKey)) {
-          currentPartition = partition;
-          break;
-        }
-      }
-      
-      if (currentPartition != null) {
-        // Count only non-skipped keys in this partition
-        if (_skippableKeys.isEmpty) {
-          return currentPartition.length;
-        }
-        int skippedCount = 0;
-        for (final key in currentPartition) {
-          if (_isKeySkipped(key)) {
-            skippedCount++;
-          }
-        }
-        return currentPartition.length - skippedCount;
-      }
+    if (_ids == null) {
+      developer.log('${_getTimestamp()} 🔍 [SHOWCASE] totalSteps - No IDs', name: 'ShowcaseView');
+      return 0;
     }
     
+    // If partition keys are present, try to find the current partition
+    if (_partitionKeys != null) {
+      // If showcase is running, find partition based on current key
+      if (_activeWidgetId != null && _activeWidgetId! >= 0 && _activeWidgetId! < _ids!.length) {
+        final currentKey = _ids![_activeWidgetId!];
+        
+        // Find which partition list the current key belongs to
+        // Use identity comparison to ensure we find the exact key reference
+        List<GlobalKey>? currentPartition;
+        int partitionIndex = -1;
+        for (int pIdx = 0; pIdx < _partitionKeys!.length; pIdx++) {
+          final partition = _partitionKeys![pIdx];
+          // Check if currentKey is in this partition using identity
+          for (final key in partition) {
+            if (identical(key, currentKey) || key == currentKey) {
+              currentPartition = partition;
+              partitionIndex = pIdx;
+              break;
+            }
+          }
+          if (currentPartition != null) break;
+        }
+        
+        if (currentPartition != null) {
+          // Count only non-skipped keys in this partition
+          if (_skippableKeys.isEmpty) {
+            developer.log(
+              '${_getTimestamp()} 📊 [SHOWCASE] totalSteps - Partition mode (no skippable)\n${_mapToString({
+                'active_index': _activeWidgetId,
+                'partition_index': partitionIndex,
+                'partition_size': currentPartition.length,
+                'total_steps': currentPartition.length,
+                'all_partitions': _partitionKeys!.map((p) => p.length).toList(),
+              })}',
+              name: 'ShowcaseView',
+            );
+            return currentPartition.length;
+          }
+          int skippedCount = 0;
+          for (final key in currentPartition) {
+            if (_isKeySkipped(key)) {
+              skippedCount++;
+            }
+          }
+          final total = currentPartition.length - skippedCount;
+          developer.log(
+            '${_getTimestamp()} 📊 [SHOWCASE] totalSteps - Partition mode (with skippable)\n${_mapToString({
+              'active_index': _activeWidgetId,
+              'partition_index': partitionIndex,
+              'partition_size': currentPartition.length,
+              'skipped_count': skippedCount,
+              'total_steps': total,
+              'all_partitions': _partitionKeys!.map((p) => p.length).toList(),
+            })}',
+            name: 'ShowcaseView',
+          );
+          return total;
+        } else {
+          developer.log(
+            '${_getTimestamp()} ⚠️ [SHOWCASE] totalSteps - Partition not found, returning 0\n${_mapToString({
+              'active_index': _activeWidgetId,
+              'current_key': currentKey.toString(),
+              'partition_count': _partitionKeys!.length,
+              'all_partitions': _partitionKeys!.map((p) => p.length).toList(),
+            })}',
+            name: 'ShowcaseView',
+          );
+        }
+      } else {
+        developer.log(
+          '${_getTimestamp()} ⚠️ [SHOWCASE] totalSteps - Invalid activeWidgetId for partition\n${_mapToString({
+            'active_index': _activeWidgetId,
+            'total_steps': _ids!.length,
+            'partition_count': _partitionKeys!.length,
+          })}',
+          name: 'ShowcaseView',
+        );
+      }
+      
+      // If partitions are provided but we can't determine current partition,
+      // this shouldn't happen if validation passed, but return 0 to avoid
+      // showing incorrect total. This ensures we don't fall back to full total
+      // when partitions exist.
+      return 0;
+    }
+    
+    // If no partition keys, return total of all keys
     // If no skippable keys, return the total length
     if (_skippableKeys.isEmpty) {
+      developer.log(
+        '${_getTimestamp()} 📊 [SHOWCASE] totalSteps - No partitions, no skippable\n${_mapToString({
+          'total_steps': _ids!.length,
+        })}',
+        name: 'ShowcaseView',
+      );
       return _ids!.length;
     }
     
@@ -315,7 +557,16 @@ class ShowcaseView {
         skippedCount++;
       }
     }
-    return _ids!.length - skippedCount;
+    final total = _ids!.length - skippedCount;
+    developer.log(
+      '${_getTimestamp()} 📊 [SHOWCASE] totalSteps - No partitions, with skippable\n${_mapToString({
+        'total_steps': _ids!.length,
+        'skipped_count': skippedCount,
+        'returned_total': total,
+      })}',
+      name: 'ShowcaseView',
+    );
+    return total;
   }
 
   /// Returns list of showcase controllers for current active showcase.
@@ -348,6 +599,16 @@ class ShowcaseView {
     assert(_mounted, 'ShowcaseView is no longer mounted');
     if (!_mounted) return;
     
+    developer.log(
+      '${_getTimestamp()} 🎬 [SHOWCASE] startShowCase called\n${_mapToString({
+        'widgetIds_count': widgetIds.length,
+        'partitionKeys_count': partitionKeys?.length ?? 0,
+        'delay': delay.inMilliseconds,
+        'scope': scope,
+      })}',
+      name: 'ShowcaseView',
+    );
+    
     // If partition keys are provided, validate that all partitions concatenated = widgetIds
     if (partitionKeys != null && partitionKeys.isNotEmpty) {
       // Flatten all partition lists
@@ -355,6 +616,16 @@ class ShowcaseView {
       for (final partition in partitionKeys) {
         combinedKeys.addAll(partition);
       }
+      
+      developer.log(
+        '${_getTimestamp()} 📊 [SHOWCASE] Partition validation\n${_mapToString({
+          'total_keys': widgetIds.length,
+          'combined_partition_keys': combinedKeys.length,
+          'partition_count': partitionKeys.length,
+          'partitions': partitionKeys.map((p) => p.length).toList(),
+        })}',
+        name: 'ShowcaseView',
+      );
       
       assert(
         combinedKeys.length == widgetIds.length,
@@ -372,9 +643,18 @@ class ShowcaseView {
       
       // Store partition keys (deep copy)
       _partitionKeys = partitionKeys.map((list) => List<GlobalKey>.from(list)).toList();
+      
+      developer.log(
+        '${_getTimestamp()} ✅ [SHOWCASE] Partitions stored\n${_mapToString({
+          'partition_count': _partitionKeys!.length,
+          'partitions': _partitionKeys!.map((p) => p.length).toList(),
+        })}',
+        name: 'ShowcaseView',
+      );
     } else {
       // No partition keys, clear them
       _partitionKeys = null;
+      developer.log('${_getTimestamp()} ℹ️ [SHOWCASE] No partitions provided', name: 'ShowcaseView');
     }
     
     _findEnclosingShowcaseView(widgetIds)._startShowcase(delay, widgetIds);
@@ -408,9 +688,31 @@ class ShowcaseView {
   ///
   /// Will finish entire showcase if no more widgets to show.
   void completed(GlobalKey? key) {
+    developer.log(
+      '${_getTimestamp()} ✅ [SHOWCASE] completed called\n${_mapToString({
+        'key': key?.toString(),
+        'active_index': _activeWidgetId,
+        'active_key': _activeWidgetId != null && _ids != null && _activeWidgetId! < _ids!.length
+            ? _ids![_activeWidgetId!].toString()
+            : null,
+        'mounted': _mounted,
+        'current_step_index': currentStepIndex,
+        'total_steps': totalSteps,
+      })}',
+      name: 'ShowcaseView',
+    );
+    
     if (_activeWidgetId == null ||
         _ids?[_activeWidgetId!] != key ||
         !_mounted) {
+      developer.log(
+        '${_getTimestamp()} ⚠️ [SHOWCASE] completed - Conditions not met, ignoring\n${_mapToString({
+          'active_index_null': _activeWidgetId == null,
+          'key_mismatch': _ids?[_activeWidgetId ?? -1] != key,
+          'not_mounted': !_mounted,
+        })}',
+        name: 'ShowcaseView',
+      );
       return;
     }
     _changeSequence(ShowcaseProgressType.forward);
@@ -421,8 +723,25 @@ class ShowcaseView {
     final idDoesNotExist =
         _activeWidgetId == null || (_ids?.length ?? -1) <= _activeWidgetId!;
 
+    developer.log(
+      '${_getTimestamp()} 🚫 [SHOWCASE] dismiss called\n${_mapToString({
+        'active_index': _activeWidgetId,
+        'id_does_not_exist': idDoesNotExist,
+        'dismissed_key': idDoesNotExist || _activeWidgetId == null || _ids == null
+            ? null
+            : (_activeWidgetId! < _ids!.length ? _ids![_activeWidgetId!].toString() : null),
+        'current_step_index': currentStepIndex,
+        'total_steps': totalSteps,
+        'mounted': _mounted,
+      })}',
+      name: 'ShowcaseView',
+    );
+
     onDismiss?.call(idDoesNotExist ? null : _ids?[_activeWidgetId!]);
-    if (!_mounted) return;
+    if (!_mounted) {
+      developer.log('${_getTimestamp()} ⚠️ [SHOWCASE] dismiss - Not mounted, aborting', name: 'ShowcaseView');
+      return;
+    }
 
     _cleanupAfterSteps();
     OverlayManager.instance.update(
@@ -493,18 +812,72 @@ class ShowcaseView {
       'You are trying to start Showcase while it has been disabled with '
       '[enableShowcase] parameter.',
     );
-    if (!enableShowcase) return;
+    if (!enableShowcase) {
+      developer.log('${_getTimestamp()} ⚠️ [SHOWCASE] Showcase disabled, not starting', name: 'ShowcaseView');
+      return;
+    }
 
     ShowcaseService.instance.updateCurrentScope(scope);
     if (delay == Duration.zero) {
       _ids = widgetIds;
       _activeWidgetId = 0;
+      
+      developer.log(
+        '${_getTimestamp()} 🚀 [SHOWCASE] _startShowcase - Starting showcase\n${_mapToString({
+          'total_steps': widgetIds.length,
+          'active_index': _activeWidgetId,
+          'has_partitions': _partitionKeys != null,
+          'partition_count': _partitionKeys?.length ?? 0,
+          'scope': scope,
+        })}',
+        name: 'ShowcaseView',
+      );
+      
       _onStart();
       OverlayManager.instance.update(
         show: isShowcaseRunning,
         scope: scope,
       );
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     } else {
+      developer.log(
+        '${_getTimestamp()} ⏳ [SHOWCASE] Delaying start by ${delay.inMilliseconds}ms',
+        name: 'ShowcaseView',
+      );
       Future.delayed(delay, () => _startShowcase(Duration.zero, widgetIds));
     }
   }
@@ -524,16 +897,47 @@ class ShowcaseView {
       ShowcaseProgressType.forward => _activeWidgetId! + 1,
       ShowcaseProgressType.backward => _activeWidgetId! - 1,
     };
+    
+    developer.log(
+      '${_getTimestamp()} 🔄 [SHOWCASE] _changeSequence - ${type.name}\n${_mapToString({
+        'current_index': _activeWidgetId,
+        'next_index': id,
+        'total_steps': _ids?.length ?? 0,
+        'direction': type.name,
+      })}',
+      name: 'ShowcaseView',
+    );
+    
     _onComplete().then(
           (_) async {
-        if (!_mounted) return;
+        if (!_mounted) {
+          developer.log('${_getTimestamp()} ⚠️ [SHOWCASE] Not mounted, aborting sequence change', name: 'ShowcaseView');
+          return;
+        }
         _activeWidgetId = id;
+        
+        developer.log(
+          '${_getTimestamp()} 📍 [SHOWCASE] Active index set to $id\n${_mapToString({
+            'active_index': _activeWidgetId,
+            'total_steps': _ids?.length ?? 0,
+          })}',
+          name: 'ShowcaseView',
+        );
+        
         // Skip showcases that don't have their key in the widget tree
         // Check per-key skippable status
         _skipInvalidShowcases(type);
         await _onStart();
         // Check if showcase was finished in _onStart() or if we've reached the end
         if (!_mounted || _activeWidgetId == null || _activeWidgetId! >= _ids!.length || _activeWidgetId! < 0) {
+          developer.log(
+            '${_getTimestamp()} 🏁 [SHOWCASE] Showcase finished or reached end\n${_mapToString({
+              'mounted': _mounted,
+              'active_index': _activeWidgetId,
+              'total_steps': _ids?.length ?? 0,
+            })}',
+            name: 'ShowcaseView',
+          );
           // Showcase finished in _onStart() or reached the end
           return;
         }
@@ -553,12 +957,44 @@ class ShowcaseView {
   /// * [type] - Direction to skip (forward or backward)
   /// * [maxIterations] - Maximum number of iterations to prevent infinite loops
   void _skipInvalidShowcases(ShowcaseProgressType type, {int maxIterations = 100}) {
-    if (_ids == null || _activeWidgetId == null) return;
+    if (_ids == null || _activeWidgetId == null) {
+      developer.log('${_getTimestamp()} ⚠️ [SHOWCASE] _skipInvalidShowcases - No IDs or activeWidgetId', name: 'ShowcaseView');
+      return;
+    }
     
     int iterations = 0;
+    int skippedCount = 0;
+    
+    final keyStatus = _getKeyStatusSummary();
+    developer.log(
+      '${_getTimestamp()} 🔍 [SHOWCASE] _skipInvalidShowcases - Starting check\n${_mapToString({
+        'start_index': _activeWidgetId,
+        'direction': type.name,
+        'total_steps': _ids!.length,
+        'checking_scope': keyStatus['checking_scope'],
+        'key_status': {
+          'total_keys': keyStatus['total_keys'],
+          'found_count': keyStatus['found_count'],
+          'not_found_count': keyStatus['not_found_count'],
+          'registered_keys_in_service_count': keyStatus['registered_keys_count'],
+          'registered_keys_in_service': keyStatus['registered_keys_in_service'],
+          'key_diagnostics': keyStatus['key_diagnostics'],
+        },
+      })}',
+      name: 'ShowcaseView',
+    );
+    
     while (iterations < maxIterations) {
       // Check if we've reached the end
       if (_activeWidgetId! >= _ids!.length || _activeWidgetId! < 0) {
+        developer.log(
+          '${_getTimestamp()} 🏁 [SHOWCASE] Reached end of showcase list\n${_mapToString({
+            'active_index': _activeWidgetId,
+            'total_steps': _ids!.length,
+            'skipped_count': skippedCount,
+          })}',
+          name: 'ShowcaseView',
+        );
         break;
       }
 
@@ -566,8 +1002,38 @@ class ShowcaseView {
       
       // Check if current showcase has controllers (key exists in widget tree)
       final controllers = _getCurrentActiveControllers;
+      
+      // Get diagnostic info for current key
+      final currentKeyDiagnostic = (keyStatus['key_diagnostics'] as List)
+          .firstWhere(
+            (d) => d['index'] == _activeWidgetId,
+            orElse: () => {'key': currentKey.toString(), 'error': 'Diagnostic not found'},
+          );
+      
+      developer.log(
+        '${_getTimestamp()} 🔎 [SHOWCASE] Checking key at index ${_activeWidgetId}\n${_mapToString({
+          'index': _activeWidgetId,
+          'key': currentKey.toString(),
+          'has_controllers': controllers.isNotEmpty,
+          'controller_count': controllers.length,
+          'is_skippable': isSkippable(currentKey),
+          'checking_scope': keyStatus['checking_scope'],
+          'diagnostic': currentKeyDiagnostic,
+        })}',
+        name: 'ShowcaseView',
+      );
+      
       if (controllers.isNotEmpty) {
         // Found a valid showcase, stop skipping
+        if (skippedCount > 0) {
+          developer.log(
+            '${_getTimestamp()} ✅ [SHOWCASE] Found valid showcase after skipping $skippedCount\n${_mapToString({
+              'final_index': _activeWidgetId,
+              'skipped_count': skippedCount,
+            })}',
+            name: 'ShowcaseView',
+          );
+        }
         break;
       }
 
@@ -576,10 +1042,61 @@ class ShowcaseView {
       
       if (!shouldSkip) {
         // Not skippable, stop here (will pause)
+        // Get diagnostic info for current key
+        final currentKeyDiagnostic = (keyStatus['key_diagnostics'] as List)
+            .firstWhere(
+              (d) => d['index'] == _activeWidgetId,
+              orElse: () => {'key': currentKey.toString(), 'error': 'Diagnostic not found'},
+            );
+        developer.log(
+          '${_getTimestamp()} ⏸️ [SHOWCASE] Key not found for $currentKey and NOT skippable - PAUSING\n${_mapToString({
+            'index': _activeWidgetId,
+            'key': currentKey.toString(),
+            'action': 'PAUSE',
+            'checking_scope': keyStatus['checking_scope'],
+            'current_key_diagnostic': currentKeyDiagnostic,
+            'key_status': {
+              'total_keys': keyStatus['total_keys'],
+              'found_count': keyStatus['found_count'],
+              'not_found_count': keyStatus['not_found_count'],
+              'registered_keys_in_service_count': keyStatus['registered_keys_count'],
+              'registered_keys_in_service': keyStatus['registered_keys_in_service'],
+              'not_found_keys': keyStatus['not_found_keys'],
+              'found_keys': keyStatus['found_keys'],
+            },
+          })}',
+          name: 'ShowcaseView',
+        );
         break;
       }
 
       // Current showcase is skippable, skip to next/previous
+      // Get diagnostic info for current key (reuse the one we already got above)
+      final skipKeyDiagnostic = (keyStatus['key_diagnostics'] as List)
+          .firstWhere(
+            (d) => d['index'] == _activeWidgetId,
+            orElse: () => {'key': currentKey.toString(), 'error': 'Diagnostic not found'},
+          );
+      developer.log(
+        '${_getTimestamp()} ⏭️ [SHOWCASE] Key not found for $currentKey but SKIPPABLE - Skipping\n${_mapToString({
+          'index': _activeWidgetId,
+          'key': currentKey.toString(),
+          'action': 'SKIP',
+          'checking_scope': keyStatus['checking_scope'],
+          'current_key_diagnostic': skipKeyDiagnostic,
+          'key_status': {
+            'total_keys': keyStatus['total_keys'],
+            'found_count': keyStatus['found_count'],
+            'not_found_count': keyStatus['not_found_count'],
+            'registered_keys_in_service_count': keyStatus['registered_keys_count'],
+            'registered_keys_in_service': keyStatus['registered_keys_in_service'],
+            'not_found_keys': keyStatus['not_found_keys'],
+            'found_keys': keyStatus['found_keys'],
+          },
+        })}',
+        name: 'ShowcaseView',
+      );
+      
       final nextId = switch (type) {
         ShowcaseProgressType.forward => _activeWidgetId! + 1,
         ShowcaseProgressType.backward => _activeWidgetId! - 1,
@@ -587,11 +1104,30 @@ class ShowcaseView {
 
       // Check bounds
       if (nextId >= _ids!.length || nextId < 0) {
+        developer.log(
+          '${_getTimestamp()} 🏁 [SHOWCASE] Reached bounds, stopping skip\n${_mapToString({
+            'next_index': nextId,
+            'total_steps': _ids!.length,
+            'skipped_count': skippedCount,
+          })}',
+          name: 'ShowcaseView',
+        );
         break;
       }
 
       _activeWidgetId = nextId;
+      skippedCount++;
       iterations++;
+    }
+    
+    if (iterations >= maxIterations) {
+      developer.log(
+        '${_getTimestamp()} ⚠️ [SHOWCASE] Max iterations reached in _skipInvalidShowcases\n${_mapToString({
+          'iterations': iterations,
+          'skipped_count': skippedCount,
+        })}',
+        name: 'ShowcaseView',
+      );
     }
   }
 
@@ -648,12 +1184,30 @@ class ShowcaseView {
   Future<void> _onStart() async {
     _activeWidgetId ??= 0;
     
+    developer.log(
+      '${_getTimestamp()} ▶️ [SHOWCASE] _onStart - Starting step\n${_mapToString({
+        'active_index': _activeWidgetId,
+        'total_steps': _ids?.length ?? 0,
+        'current_step_index': currentStepIndex,
+        'total_steps_calculated': totalSteps,
+        'has_partitions': _partitionKeys != null,
+      })}',
+      name: 'ShowcaseView',
+    );
+    
     // Skip showcases that don't have their key in the widget tree
     // Check per-key skippable status
     _skipInvalidShowcases(ShowcaseProgressType.forward);
     
     // Check if we've reached the end after skipping
     if (_activeWidgetId! >= _ids!.length || _activeWidgetId! < 0) {
+      developer.log(
+        '${_getTimestamp()} 🏁 [SHOWCASE] _onStart - Reached end, finishing\n${_mapToString({
+          'active_index': _activeWidgetId,
+          'total_steps': _ids!.length,
+        })}',
+        name: 'ShowcaseView',
+      );
       _cleanupAfterSteps();
       OverlayManager.instance.update(show: false, scope: scope);
       onFinish?.call();
@@ -661,21 +1215,83 @@ class ShowcaseView {
     }
     
     final controllers = _getCurrentActiveControllers;
+    final currentKey = _ids![_activeWidgetId!];
+    
+    developer.log(
+      '${_getTimestamp()} 🔍 [SHOWCASE] _onStart - Checking controllers\n${_mapToString({
+        'active_index': _activeWidgetId,
+        'current_key': currentKey.toString(),
+        'controller_count': controllers.length,
+        'is_skippable': isSkippable(currentKey),
+      })}',
+      name: 'ShowcaseView',
+    );
     
     // If no controllers found, check if we should pause or skip
     if (controllers.isEmpty) {
-      final currentKey = _ids![_activeWidgetId!];
       final shouldSkip = isSkippable(currentKey);
       
       if (!shouldSkip) {
         // Not skippable, pause (keep showcase active but don't show anything)
         // The showcase will continue when the widget appears and recalculateRootWidgetSize
         // is called, which will trigger updateControllerData and overlay update
+        final keyStatus = _getKeyStatusSummary();
+        // Get diagnostic info for current key
+        final currentKeyDiagnostic = (keyStatus['key_diagnostics'] as List)
+            .firstWhere(
+              (d) => d['index'] == _activeWidgetId,
+              orElse: () => {'key': currentKey.toString(), 'error': 'Diagnostic not found'},
+            );
+        developer.log(
+          '${_getTimestamp()} ⏸️ [SHOWCASE] _onStart - No controllers, NOT skippable - PAUSING\n${_mapToString({
+            'active_index': _activeWidgetId,
+            'current_key': currentKey.toString(),
+            'action': 'PAUSE',
+            'checking_scope': keyStatus['checking_scope'],
+            'current_key_diagnostic': currentKeyDiagnostic,
+            'key_status': {
+              'total_keys': keyStatus['total_keys'],
+              'found_count': keyStatus['found_count'],
+              'not_found_count': keyStatus['not_found_count'],
+              'registered_keys_in_service_count': keyStatus['registered_keys_count'],
+              'registered_keys_in_service': keyStatus['registered_keys_in_service'],
+              'not_found_keys': keyStatus['not_found_keys'],
+              'found_keys': keyStatus['found_keys'],
+            },
+          })}',
+          name: 'ShowcaseView',
+        );
         OverlayManager.instance.update(show: false, scope: scope);
         return;
       }
       // If skippable, _skipInvalidShowcases should have already handled it
       // But if we're here, it means we couldn't skip further, so finish
+      final keyStatus = _getKeyStatusSummary();
+      // Get diagnostic info for current key
+      final currentKeyDiagnostic = (keyStatus['key_diagnostics'] as List)
+          .firstWhere(
+            (d) => d['index'] == _activeWidgetId,
+            orElse: () => {'key': currentKey.toString(), 'error': 'Diagnostic not found'},
+          );
+      developer.log(
+        '${_getTimestamp()} 🏁 [SHOWCASE] _onStart - No controllers, skippable but can\'t skip further - FINISHING\n${_mapToString({
+          'active_index': _activeWidgetId,
+          'current_key': currentKey.toString(),
+          'action': 'FINISH',
+          'checking_scope': keyStatus['checking_scope'],
+          'current_key_diagnostic': currentKeyDiagnostic,
+          'key_status': {
+            'total_keys': keyStatus['total_keys'],
+            'found_count': keyStatus['found_count'],
+            'not_found_count': keyStatus['not_found_count'],
+            'registered_keys_in_service_count': keyStatus['registered_keys_count'],
+            'registered_keys_in_service': keyStatus['registered_keys_in_service'],
+            'not_found_keys': keyStatus['not_found_keys'],
+            'found_keys': keyStatus['found_keys'],
+          },
+        })}',
+        name: 'ShowcaseView',
+      );
       _cleanupAfterSteps();
       OverlayManager.instance.update(show: false, scope: scope);
       onFinish?.call();
@@ -683,13 +1299,26 @@ class ShowcaseView {
     }
     
     // Widget exists, start the showcase
-    onStart?.call(_activeWidgetId, _ids![_activeWidgetId!]);
+    developer.log(
+      '${_getTimestamp()} ✨ [SHOWCASE] _onStart - Starting tooltip display\n${_mapToString({
+        'active_index': _activeWidgetId,
+        'current_key': currentKey.toString(),
+        'controller_count': controllers.length,
+        'current_step_index': currentStepIndex,
+        'total_steps': totalSteps,
+        'step_display': '${(currentStepIndex ?? 0) + 1}/$totalSteps',
+      })}',
+      name: 'ShowcaseView',
+    );
+    
+    onStart?.call(_activeWidgetId, currentKey);
     final controllerLength = controllers.length;
     for (var i = 0; i < controllerLength; i++) {
       final controller = controllers[i];
       final isAutoScroll =
           controller.config.enableAutoScroll ?? enableAutoScroll;
       if (controllerLength == 1 && isAutoScroll) {
+        developer.log('${_getTimestamp()} 📜 [SHOWCASE] Scrolling into view', name: 'ShowcaseView');
         await controller.scrollIntoView();
       } else {
         controller.startShowcase();
@@ -700,8 +1329,13 @@ class ShowcaseView {
       _cancelTimer();
       // Showcase is first.
       final config = _getCurrentActiveControllers.firstOrNull?.config;
+      final delay = config?.autoPlayDelay ?? autoPlayDelay;
+      developer.log(
+        '${_getTimestamp()} ⏱️ [SHOWCASE] Auto-play enabled, next in ${delay.inMilliseconds}ms',
+        name: 'ShowcaseView',
+      );
       _timer = Timer(
-        config?.autoPlayDelay ?? autoPlayDelay,
+        delay,
             () => next(force: true),
       );
     }
@@ -713,6 +1347,21 @@ class ShowcaseView {
   Future<void> _onComplete() async {
     final currentControllers = _getCurrentActiveControllers;
     final controllerLength = currentControllers.length;
+    
+    final activeId = _activeWidgetId ?? -1;
+    final currentKey = activeId >= 0 && activeId < (_ids?.length ?? 0) ? _ids![activeId] : null;
+
+    developer.log(
+      '${_getTimestamp()} ✅ [SHOWCASE] _onComplete - Completing step\n${_mapToString({
+        'active_index': activeId,
+        'current_key': currentKey?.toString(),
+        'controller_count': controllerLength,
+        'current_step_index': currentStepIndex,
+        'total_steps': totalSteps,
+        'step_display': currentStepIndex != null ? '${currentStepIndex! + 1}/$totalSteps' : 'N/A',
+      })}',
+      name: 'ShowcaseView',
+    );
 
     await Future.wait([
       for (var i = 0; i < controllerLength; i++)
@@ -722,7 +1371,6 @@ class ShowcaseView {
           currentControllers[i].reverseAnimationCallback!.call(),
     ]);
 
-    final activeId = _activeWidgetId ?? -1;
     if (activeId < (_ids?.length ?? activeId)) {
       onComplete?.call(activeId, _ids![activeId]);
     }
